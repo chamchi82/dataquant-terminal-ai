@@ -861,6 +861,7 @@ def compute_valuation_and_rating(fin_3yr, latest_year, naver_data, tech_data):
 
 @st.cache_data(ttl=600, show_spinner=False)
 @st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def generate_unified_ai_report_groq(api_key, stock_name, code, rating_grade, rating_en_grade, rating_score, full_payload_str):
     if not api_key:
         msg = "GROQ_API_KEY가 비어 있습니다. Streamlit Secrets에 console.groq.com에서 발급받은 키(gsk_...)를 저장해 주세요."
@@ -871,7 +872,6 @@ def generate_unified_ai_report_groq(api_key, stock_name, code, rating_grade, rat
         "Content-Type": "application/json",
     }
 
-    # 현재 계정에서 사용 가능한 최신 활성 모델을 자동 탐색
     selected_model = "llama-3.1-8b-instant"
     try:
         m_resp = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
@@ -891,7 +891,7 @@ def generate_unified_ai_report_groq(api_key, stock_name, code, rating_grade, rat
     except Exception:
         pass
 
-unified_prompt = f"""당신은 《부의 갈림길》의 거시경제 통찰과 사와카미 아쓰토의 장기 가치투자 철학을 체화한 냉철하고 객관적인 수석 리서치 애널리스트입니다.
+    unified_prompt = f"""당신은 《부의 갈림길》의 거시경제 통찰과 사와카미 아쓰토의 장기 가치투자 철학을 체화한 냉철하고 객관적인 수석 리서치 애널리스트입니다.
 반드시 자연스럽고 전문적인 한국어로만 작성하고, 이모지는 단 하나도 사용하지 마세요.
 
 분석 시 반드시 아래의 [투자 철학 및 거시경제 프레임워크]를 적용하여 종목을 입체적으로 평가하세요:
