@@ -860,10 +860,36 @@ def compute_valuation_and_rating(fin_3yr, latest_year, naver_data, tech_data):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def generate_unified_ai_report_groq(api_key, stock_name, code, rating_grade, rating_en_grade, rating_score, full_payload_str):
     if not api_key:
         msg = "GROQ_API_KEY가 비어 있습니다. Streamlit Secrets에 console.groq.com에서 발급받은 키(gsk_...)를 저장해 주세요."
         return msg, msg, msg
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # 현재 계정에서 사용 가능한 최신 활성 모델을 자동 탐색
+    selected_model = "llama-3.1-8b-instant"
+    try:
+        m_resp = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
+        if m_resp.status_code == 200:
+            avail_ids = [
+                m["id"] for m in m_resp.json().get("data", [])
+                if not any(x in m["id"].lower() for x in ["whisper", "guard", "tts", "embed", "vision"])
+            ]
+            for pref in ["llama-4", "llama-3.3", "qwen", "gpt-oss", "llama-3.1-8b", "gemma"]:
+                matched = [mid for mid in avail_ids if pref in mid.lower()]
+                if matched:
+                    selected_model = matched[0]
+                    break
+            else:
+                if avail_ids:
+                    selected_model = avail_ids[0]
+    except Exception:
+        pass
 
     unified_prompt = f"""당신은 한국 주식 시장을 분석하는 냉철하고 객관적인 수석 리서치 애널리스트입니다.
 반드시 자연스럽고 전문적인 한국어로만 작성하고, 이모지는 단 하나도 사용하지 마세요.
@@ -900,12 +926,8 @@ def generate_unified_ai_report_groq(api_key, stock_name, code, rating_grade, rat
 {full_payload_str}"""
 
     url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
     body = {
-        "model": GROQ_MODEL,
+        "model": selected_model,
         "messages": [
             {"role": "system", "content": "당신은 한국 상장기업을 분석하는 수석 퀀트 리서치 애널리스트입니다. 항상 정확한 한국어로만 답변합니다."},
             {"role": "user", "content": unified_prompt},
