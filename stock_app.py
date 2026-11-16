@@ -975,7 +975,7 @@ st.markdown(
 
 with st.expander("SHARE APP URL · 공유 링크 복사하기"):
     st.caption("우측 끝 복사 아이콘을 누르면 친구나 모바일로 보낼 수 있는 사이트 주소가 복사됩니다.")
-    st.code("https://dataquant-terminal-ai.streamlit.app", language="text")
+    st.code("https://dataquant-terminal-ai-3wrbr2lj9tpyizpbcv7xhz.streamlit.app", language="text")
 # ================= [1단계] 클릭 전환 인터랙티브 인트로 스테이지 =================
 if not st.session_state.entered:
     st.markdown(
