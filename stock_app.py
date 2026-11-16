@@ -24,7 +24,7 @@ st.set_page_config(
 # ====== API 키 로드 ======
 DART_API_KEY = st.secrets.get("DART_API_KEY", "934f9c5cd12bf41dae6318eb1893687c1ee100e6")
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", "")).strip()
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
