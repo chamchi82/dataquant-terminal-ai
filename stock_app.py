@@ -968,11 +968,14 @@ st.markdown(
     f'<div class="top-nav">'
     f'<div class="nav-brand">q.terminal.</div>'
     f'<div class="nav-meta">HUMAN — DATA EQUITY INTERFACE &nbsp;/&nbsp; {today_str}</div>'
-    f'<button class="copy-url-btn" onclick="window.copyAppShareUrl(this)">SHARE URL ↗</button>'
+    f'<div style="font-family:\'JetBrains Mono\',monospace; font-size:0.75rem; color:#D9FF54;">LIVE TERMINAL ●</div>'
     f'</div>',
     unsafe_allow_html=True,
 )
 
+with st.expander("SHARE APP URL · 공유 링크 복사하기"):
+    st.caption("우측 끝 복사 아이콘을 누르면 친구나 모바일로 보낼 수 있는 사이트 주소가 복사됩니다.")
+    st.code("https://dataquant-terminal-ai.streamlit.app", language="text")
 # ================= [1단계] 클릭 전환 인터랙티브 인트로 스테이지 =================
 if not st.session_state.entered:
     st.markdown(
