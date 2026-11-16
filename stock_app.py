@@ -12,7 +12,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 import opendartreader
-from google import genai
 
 # ====== 페이지 기본 설정 ======
 st.set_page_config(
@@ -22,10 +21,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ====== API 키 로드 ======
+# ====== API 키 로드 (Groq API 전환) ======
 DART_API_KEY = st.secrets.get("DART_API_KEY", "934f9c5cd12bf41dae6318eb1893687c1ee100e6")
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", "")).strip()
-GEMINI_MODEL = "gemini-3.8-flash"
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", "")).strip()
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -860,13 +859,14 @@ def compute_valuation_and_rating(fin_3yr, latest_year, naver_data, tech_data):
     }
 
 
-def generate_unified_ai_report(api_key, stock_name, code, rating, full_payload_str):
+@st.cache_data(ttl=600, show_spinner=False)
+def generate_unified_ai_report_groq(api_key, stock_name, code, rating_grade, rating_en_grade, rating_score, full_payload_str):
     if not api_key:
-        msg = "GEMINI_API_KEY가 비어 있습니다. Streamlit Secrets에 API 키를 저장해 주세요."
+        msg = "GROQ_API_KEY가 비어 있습니다. Streamlit Secrets에 console.groq.com에서 발급받은 키(gsk_...)를 저장해 주세요."
         return msg, msg, msg
 
-    unified_prompt = f"""당신은 냉철하고 객관적인 수석 리서치 애널리스트입니다.
-이모지는 단 하나도 사용하지 마세요.
+    unified_prompt = f"""당신은 한국 주식 시장을 분석하는 냉철하고 객관적인 수석 리서치 애널리스트입니다.
+반드시 자연스럽고 전문적인 한국어로만 작성하고, 이모지는 단 하나도 사용하지 마세요.
 제공된 [정량 데이터]의 사실적 수치만 바탕으로 아래 3개 섹션 리포트를 작성하되, 각 섹션 사이를 반드시 정확히 `===SECTION_SPLIT===` 문자열로 구분하여 출력하세요.
 
 [섹션 1: 차트 기술적 분석]
@@ -880,10 +880,10 @@ def generate_unified_ai_report(api_key, stock_name, code, rating, full_payload_s
 ===SECTION_SPLIT===
 
 [섹션 3: 최종 종합 리서치 의견]
-정량 알고리즘이 산출한 종합 투자 의견 등급은 **[{rating['en_grade']} · {rating['grade']}]** (5단계 기준: 적극매수 > 매수 > 보류 > 위험 > 매우 위험)입니다. 아래 양식대로 작성하세요:
+정량 알고리즘이 산출한 종합 투자 의견 등급은 **[{rating_en_grade} · {rating_grade}]** (5단계 기준: 적극매수 > 매수 > 보류 > 위험 > 매우 위험)입니다. 아래 양식대로 작성하세요:
 
-### 최종 종합 투자 의견: **{rating['en_grade']} · {rating['grade']}** (종합 점수 {rating['total_score']}점 / 100점)
-* **의견 결정의 핵심 근거:** (실적 추세, 밸류에이션, 차트 추세를 종합해 왜 '{rating['grade']}' 의견이 도출되었는지 2~3문장으로 객관적 서술)
+### 최종 종합 투자 의견: **{rating_en_grade} · {rating_grade}** (종합 점수 {rating_score}점 / 100점)
+* **의견 결정의 핵심 근거:** (실적 추세, 밸류에이션, 차트 추세를 종합해 왜 '{rating_grade}' 의견이 도출되었는지 2~3문장으로 객관적 서술)
 
 #### 1. 실적 및 재무 팩트 체크
 * (최근 3개년 매출·영업이익·순이익 증감 흐름과 부채비율 등 객관적 사실 요약)
@@ -899,26 +899,44 @@ def generate_unified_ai_report(api_key, stock_name, code, rating, full_payload_s
 [정량 데이터]
 {full_payload_str}"""
 
-    client = genai.Client(api_key=api_key)
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": "당신은 한국 상장기업을 분석하는 수석 퀀트 리서치 애널리스트입니다. 항상 정확한 한국어로만 답변합니다."},
+            {"role": "user", "content": unified_prompt},
+        ],
+        "temperature": 0.25,
+        "max_tokens": 2200,
+    }
+
     for attempt in range(3):
         try:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=unified_prompt,
-            )
-            parts = [p.strip() for p in response.text.split("===SECTION_SPLIT===")]
-            if len(parts) >= 3:
-                return parts[0], parts[1], parts[2]
-            return response.text, "상단 리포트 참조", response.text
-        except Exception as e:
-            err_str = str(e)
-            if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                time.sleep(2.0 * (attempt + 1))
+            resp = requests.post(url, headers=headers, json=body, timeout=25)
+            if resp.status_code == 200:
+                text = resp.json()["choices"][0]["message"]["content"]
+                parts = [p.strip() for p in text.split("===SECTION_SPLIT===")]
+                if len(parts) >= 3:
+                    return parts[0], parts[1], parts[2]
+                return text, "상단 리포트 참조", text
+            elif resp.status_code in (429, 503):
+                time.sleep(1.5 * (attempt + 1))
                 continue
-            err_msg = f"AI 호출 오류: {e}"
+            else:
+                err_msg = f"Groq API 오류 ({resp.status_code}): {resp.text}"
+                return err_msg, err_msg, err_msg
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(1.5)
+                continue
+            err_msg = f"Groq 연결 오류: {e}"
             return err_msg, err_msg, err_msg
 
-    busy_msg = "현재 Google Gemini 서버 자체에 일시적인 트래픽이 폭주(503 과부하)하고 있습니다. 15~30초 후 ANALYZE 버튼을 다시 눌러주세요."
+    busy_msg = "Groq 서버 요청 한도에 일시적으로 도달했습니다. 10초 후 다시 시도해 주세요."
     return busy_msg, busy_msg, busy_msg
 
 
@@ -1021,9 +1039,15 @@ else:
             indent=2,
         )
 
-        with st.spinner("AI 수석 애널리스트가 차트·밸류에이션·종합 리포트를 통합 생성 중입니다..."):
-            chart_analysis, ind_analysis, final_report = generate_unified_ai_report(
-                GEMINI_API_KEY, stock_name, code, rating, full_payload_str
+        with st.spinner("Groq AI 엔진이 차트·밸류에이션·종합 리포트를 초고속 생성 중입니다..."):
+            chart_analysis, ind_analysis, final_report = generate_unified_ai_report_groq(
+                GROQ_API_KEY,
+                stock_name,
+                code,
+                rating["grade"],
+                rating["en_grade"],
+                rating["total_score"],
+                full_payload_str,
             )
 
         stage_html = (
