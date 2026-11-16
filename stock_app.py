@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import time
 from datetime import datetime, timedelta
 
 import altair as alt
@@ -859,19 +860,66 @@ def compute_valuation_and_rating(fin_3yr, latest_year, naver_data, tech_data):
     }
 
 
-def ask_gemini_ai(api_key, system_instruction, payload_json):
+def generate_unified_ai_report(api_key, stock_name, code, rating, full_payload_str):
     if not api_key:
-        return "GEMINI_API_KEY가 비어 있습니다. Streamlit Secrets에 Google AI Studio API 키를 저장해 주세요."
-    prompt = f"{system_instruction}\n\n[정량 데이터]\n{payload_json}"
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-        )
-        return response.text
-    except Exception as e:
-        return f"AI 호출 오류: {e}"
+        msg = "GEMINI_API_KEY가 비어 있습니다. Streamlit Secrets에 API 키를 저장해 주세요."
+        return msg, msg, msg
+
+    unified_prompt = f"""당신은 냉철하고 객관적인 수석 리서치 애널리스트입니다.
+이모지는 단 하나도 사용하지 마세요.
+제공된 [정량 데이터]의 사실적 수치만 바탕으로 아래 3개 섹션 리포트를 작성하되, 각 섹션 사이를 반드시 정확히 `===SECTION_SPLIT===` 문자열로 구분하여 출력하세요.
+
+[섹션 1: 차트 기술적 분석]
+- 제공된 20·60·120일 이동평균선 이격도, RSI(14일), MACD 추세, 볼린저밴드 위치, 60일 최고/최저가 수치만 근거로 현재 주가 차트의 추세 방향, 단기 지지선과 저항선 가격대, 과열/침체 여부를 4~5줄의 명확한 불릿 포인트로 작성하세요.
+
+===SECTION_SPLIT===
+
+[섹션 2: 밸류에이션 및 재무 비율 해석]
+- 제공된 PER, PBR, ROE, 부채비율, 영업이익률, 그레이엄 적정주가 수치만 근거로 현재 주가의 밸류에이션 매력도와 재무 건전성을 4줄 내외의 명확한 불릿 포인트로 작성하세요.
+
+===SECTION_SPLIT===
+
+[섹션 3: 최종 종합 리서치 의견]
+정량 알고리즘이 산출한 종합 투자 의견 등급은 **[{rating['en_grade']} · {rating['grade']}]** (5단계 기준: 적극매수 > 매수 > 보류 > 위험 > 매우 위험)입니다. 아래 양식대로 작성하세요:
+
+### 최종 종합 투자 의견: **{rating['en_grade']} · {rating['grade']}** (종합 점수 {rating['total_score']}점 / 100점)
+* **의견 결정의 핵심 근거:** (실적 추세, 밸류에이션, 차트 추세를 종합해 왜 '{rating['grade']}' 의견이 도출되었는지 2~3문장으로 객관적 서술)
+
+#### 1. 실적 및 재무 팩트 체크
+* (최근 3개년 매출·영업이익·순이익 증감 흐름과 부채비율 등 객관적 사실 요약)
+
+#### 2. 긍정적 모멘텀 (상승 요인)
+* (재무·차트·뉴스에서 확인되는 강점 2가지)
+
+#### 3. 잠재 리스크 (주의 요인)
+* (데이터상 확인되는 약점 또는 주의할 지표 2가지)
+
+*(마지막 줄에 "※ 본 리포트는 DART 공시 및 시장 지표의 정량 분석 결과이며, 최종 투자 판단의 책임은 투자자 본인에게 있습니다." 표기)*
+
+[정량 데이터]
+{full_payload_str}"""
+
+    client = genai.Client(api_key=api_key)
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=unified_prompt,
+            )
+            parts = [p.strip() for p in response.text.split("===SECTION_SPLIT===")]
+            if len(parts) >= 3:
+                return parts[0], parts[1], parts[2]
+            return response.text, "상단 리포트 참조", response.text
+        except Exception as e:
+            err_str = str(e)
+            if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            err_msg = f"AI 호출 오류: {e}"
+            return err_msg, err_msg, err_msg
+
+    busy_msg = "현재 Google Gemini 서버 자체에 일시적인 트래픽이 폭주(503 과부하)하고 있습니다. 15~30초 후 ANALYZE 버튼을 다시 눌러주세요."
+    return busy_msg, busy_msg, busy_msg
 
 
 # ================= 상단 내비게이션 바 =================
@@ -951,6 +999,32 @@ else:
         chg_r = naver_data.get("전일대비등락률", "")
         cur_p_str = f"{int(cur_p):,} KRW ({chg_r})" if cur_p else "N/A"
         reasons_text = " · ".join(rating["reasons"])
+
+        fin_eok_dict = {
+            yr: {k: format_krw_unit(v) for k, v in vals.items()}
+            for yr, vals in fin_3yr.items()
+        }
+        full_payload_str = json.dumps(
+            {
+                "종목": f"{stock_name} ({code})",
+                "현재가": cur_p_str,
+                "정량_산출_투자등급": f"{rating['en_grade']} ({rating['grade']})",
+                "정량_점수": f"{rating['total_score']}점 / 100점",
+                "등급_산출_핵심근거": rating["reasons"],
+                "3개년_재무추이_억환산": fin_eok_dict,
+                "핵심밸류지표": formulas,
+                "기술적지표": tech_data,
+                "시장밸류에이션": naver_data,
+                "최근뉴스제목": [n["title"] for n in news_top5],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        with st.spinner("AI 수석 애널리스트가 차트·밸류에이션·종합 리포트를 통합 생성 중입니다..."):
+            chart_analysis, ind_analysis, final_report = generate_unified_ai_report(
+                GEMINI_API_KEY, stock_name, code, rating, full_payload_str
+            )
 
         stage_html = (
             f'<div class="glass-stage">'
@@ -1055,17 +1129,6 @@ else:
 
         with t_col:
             st.markdown('<div class="sub-head">TECHNICAL TREND & SUPPORT / RESISTANCE</div>', unsafe_allow_html=True)
-            chart_payload = json.dumps(
-                {"종목": f"{stock_name} ({code})", "현재가": cur_p_str, "기술적지표": tech_data},
-                ensure_ascii=False,
-                indent=2,
-            )
-            with st.spinner("차트 추세와 지지·저항선을 분석하는 중..."):
-                chart_analysis = ask_gemini_ai(
-                    GEMINI_API_KEY,
-                    "당신은 전문 차트 테크니컬 애널리스트입니다. 이모지는 절대 사용하지 마세요. 제공된 20·60·120일 이동평균선 이격도, RSI(14일), MACD 추세, 볼린저밴드 위치, 60일 최고/최저가 수치만 근거로 현재 주가 차트의 추세 방향, 단기 지지선과 저항선 가격대, 과열/침체 여부를 4~5줄의 명확한 불릿 포인트로 분석해 주세요.",
-                    chart_payload,
-                )
             st.markdown(f'<div class="ed-report-box">{chart_analysis}</div>', unsafe_allow_html=True)
 
         st.markdown(
@@ -1123,17 +1186,6 @@ else:
                 unsafe_allow_html=True,
             )
 
-        ind_payload_str = json.dumps(
-            {"종목": f"{stock_name} ({code})", "핵심지표": formulas, "기술지표": tech_data, "시장밸류에이션": naver_data},
-            ensure_ascii=False,
-            indent=2,
-        )
-        with st.spinner("밸류에이션 및 재무 비율 지표를 해석하는 중..."):
-            ind_analysis = ask_gemini_ai(
-                GEMINI_API_KEY,
-                "당신은 객관적 퀀트 애널리스트입니다. 이모지는 절대 사용하지 마세요. 제공된 PER, PBR, ROE, 부채비율, 영업이익률, 그레이엄 적정주가 수치만 근거로 현재 주가의 밸류에이션 매력도와 재무 건전성을 4줄 내외의 명확한 불릿 포인트로 해석해 주세요.",
-                ind_payload_str,
-            )
         st.markdown(f'<div class="ed-report-box" style="margin-top:14px;">{ind_analysis}</div>', unsafe_allow_html=True)
 
         st.markdown(
@@ -1221,47 +1273,4 @@ else:
             '<div class="ed-section-num">OBJECTIVE SYNTHESIS</div></div>',
             unsafe_allow_html=True,
         )
-
-        fin_eok_dict = {
-            yr: {k: format_krw_unit(v) for k, v in vals.items()}
-            for yr, vals in fin_3yr.items()
-        }
-        full_payload_str = json.dumps(
-            {
-                "종목": f"{stock_name} ({code})",
-                "정량_산출_투자등급": f"{rating['en_grade']} ({rating['grade']})",
-                "정량_점수": f"{rating['total_score']}점 / 100점",
-                "등급_산출_핵심근거": rating["reasons"],
-                "3개년_재무추이_억환산": fin_eok_dict,
-                "밸류_및_차트지표": json.loads(ind_payload_str),
-                "최근뉴스제목": [n["title"] for n in news_top5],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-
-        final_prompt = f"""당신은 냉철하고 객관적인 수석 리서치 애널리스트입니다.
-이모지는 단 하나도 사용하지 마세요.
-제공된 [정량 데이터]의 사실적 재무 추이, 밸류에이션, 차트 기술적 지표, 최신 뉴스 헤드라인만을 바탕으로 종합 리포트를 작성하세요.
-정량 알고리즘이 산출한 종합 투자 의견 등급은 **[{rating['en_grade']} · {rating['grade']}]** (5단계 기준: 적극매수 > 매수 > 보류 > 위험 > 매우 위험)입니다.
-
-아래 양식대로 깔끔하게 작성하세요:
-
-### 최종 종합 투자 의견: **{rating['en_grade']} · {rating['grade']}** (종합 점수 {rating['total_score']}점 / 100점)
-* **의견 결정의 핵심 근거:** (실적 추세, 밸류에이션, 차트 추세를 종합해 왜 '{rating['grade']}' 의견이 도출되었는지 2~3문장으로 객관적 서술)
-
-#### 1. 실적 및 재무 팩트 체크
-* (최근 3개년 매출·영업이익·순이익 증감 흐름과 부채비율 등 객관적 사실 요약)
-
-#### 2. 긍정적 모멘텀 (상승 요인)
-* (재무·차트·뉴스에서 확인되는 강점 2가지)
-
-#### 3. 잠재 리스크 (주의 요인)
-* (데이터상 확인되는 약점 또는 주의할 지표 2가지)
-
-*(마지막 줄에 "※ 본 리포트는 DART 공시 및 시장 지표의 정량 분석 결과이며, 최종 투자 판단의 책임은 투자자 본인에게 있습니다." 표기)*"""
-
-        with st.spinner("모든 재무 팩트, 차트, 뉴스를 종합하여 최종 투자 의견을 작성 중입니다..."):
-            final_report = ask_gemini_ai(GEMINI_API_KEY, final_prompt, full_payload_str)
-
         st.markdown(f'<div class="ed-report-box">{final_report}</div>', unsafe_allow_html=True)
